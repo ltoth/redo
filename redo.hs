@@ -3,6 +3,7 @@
 
 module Main where
 
+import Prelude hiding (catch)
 import Control.Exception (catch, catchJust, IOException)
 import Control.Monad (filterM, liftM, unless, guard)
 import qualified Data.ByteString.Lazy as BL
@@ -12,7 +13,7 @@ import Data.Maybe (listToMaybe)
 -- import Debug.Trace (traceShow)
 import GHC.IO.Exception (IOErrorType(..))
 import System.Directory (renameFile, removeFile, doesFileExist, getDirectoryContents, removeDirectoryRecursive, createDirectoryIfMissing, getCurrentDirectory, setCurrentDirectory)
-import System.Environment (getArgs, getEnvironment, getProgName, lookupEnv)
+import System.Environment (getArgs, getEnvironment, getProgName, getEnv)
 import System.Exit (ExitCode(..), exitWith)
 import System.FilePath (hasExtension, replaceBaseName, takeBaseName, (</>), splitFileName)
 import System.IO (hPutStrLn, stderr, hGetLine, withFile, IOMode(..), hFileSize)
@@ -42,17 +43,12 @@ main = do
     redo file dir
     setCurrentDirectory topDir)
   progName <- getProgName
-  -- The `REDO_TARGET` environment variable is set when `redo` or
-  -- `redo-ifchange` is spawned by another `redo` process. This lets us know
-  -- that we're in a recursive context and its value tells us the name of the
-  -- parent target. TODO: Maybe this should be renamed to REDO_PARENT_TARGET?
-  redoTarget' <- lookupEnv "REDO_TARGET"
   -- We look at the name that we were invoked as to determine how to behave.
   -- Doing so allows us to share functionality between `redo` and
   -- `redo-ifchange` without building 2 separate programs: instead we can just
   -- symlink `redo-ifchange` to `redo` (or make a copy if symlinks aren't
   -- available on the filesystem).
-  case (progName, redoTarget') of
+  case progName of
     -- The only thing special about `redo-ifchange` is that it writes out MD5
     -- information for the dependencies it was provided with. For example, a
     -- .do script like:
@@ -63,8 +59,18 @@ main = do
     -- a dependency of this target. Thinking about this, I can't really see a
     -- useful case for doing so, so later versions of redo might instead change
     -- the meaning to be "force the (re)building of this dependency".
-    ("redo-ifchange", Just redoTarget) -> mapM_ (writeMD5 redoTarget) =<< getArgs
-    ("redo-ifchange", Nothing) -> error "Missing REDO_TARGET environment variable."
+    "redo-ifchange" ->
+      catchJust (guard . isDoesNotExistError)
+                -- The `REDO_TARGET` environment variable is set when
+                -- `redo` or `redo-ifchange` is spawned by another `redo`
+                -- process. This lets us know that we're in a recursive
+                -- context and its value tells us the name of the parent
+                -- target. TODO: Maybe this should be renamed to
+                -- REDO_PARENT_TARGET?
+                (do
+                   redoTarget <- getEnv "REDO_TARGET"
+                   mapM_ (writeMD5 redoTarget) =<< getArgs)
+                (\_ -> error "Missing REDO_TARGET environment variable.")
     -- There's no case here for "redo" because it doesn't do any bookkeeping.
     _ -> return ()
 
